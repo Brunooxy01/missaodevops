@@ -1,0 +1,9 @@
+{
+  "docs": {
+    "Sobre Nós": ["doc1"],
+    "Sobre nós": ["doc2"]
+  },
+  "docs-other": {
+    "First Category": ["doc4", "doc5"]
+  }
+}

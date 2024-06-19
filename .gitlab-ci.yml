@@ -1,0 +1,169 @@
+image: node
+
+variables:
+  CONTAINER_IMAGE_NAME: "node"
+  CONTAINER_IMAGE_TAG: "latest"
+
+stages:
+  - build
+  - security
+  - deploy
+  - Notification
+
+.before_script_common: &before_script_common
+  before_script:
+    - chmod +x colors.sh
+    - source colors.sh
+    - cd website
+    - npm install
+    - npm install -g snyk
+    - snyk auth $SNYK_TOKEN
+
+################## BUILD #####################
+
+Build Site:
+  stage: build
+  <<: *before_script_common
+  cache:
+    key: site-package
+    policy: push
+    paths:
+      - ./website/build
+  artifacts:
+    name: "$CI_JOB_NAME-$CI_COMMIT_REF_NAME"
+    when: always
+    expire_in: 2h20min
+    paths:
+      - ./website/build/*
+  script:
+    - |
+      #
+      info "🛠️ Starting Build..."
+      npm run build
+      info "✅ Build Success!"
+
+################## SECURITY #####################
+
+Snyk (check):
+  stage: security
+  needs: [Build Site]
+  <<: *before_script_common
+  script:
+    - |
+      #
+      info "🔄 Initializing Snyk... starting Check..."
+      snyk monitor
+      info "✅ Step completed successfully!"
+  allow_failure: true
+
+Snyk (SCA):
+  stage: security
+  needs: [Build Site]
+  <<: *before_script_common
+  script:
+    - |
+      # 
+      info "🔄 Starting SCA..."
+      snyk test
+      info "✅ Step completed successfully!"
+  allow_failure: true
+
+Snyk (SAST):
+  stage: security
+  needs: [Build Site]
+  <<: *before_script_common
+  script:
+    - |
+      #
+      info "🔄 Starting SAST..."
+      snyk config set org=$SNYK_ORG
+      snyk code test
+      info "✅ Step completed successfully!"
+  allow_failure: true
+
+Snyk (Container Scanning):
+  stage: security
+  needs: [Build Site]
+  <<: *before_script_common
+  script:
+    - |
+      #
+      info "🔄 Starting Container Scanning..."
+      snyk container test $CONTAINER_IMAGE_NAME:$CONTAINER_IMAGE_TAG
+      snyk container monitor $CONTAINER_IMAGE_NAME:$CONTAINER_IMAGE_TAG
+      info "✅ Step completed successfully!"
+  allow_failure: true
+
+################## DEPLOY #####################
+
+deploy website:
+  stage: deploy
+  needs: ["Snyk (check)", "Snyk (SCA)", "Snyk (SAST)", "Snyk (Container Scanning)"]
+  <<: *before_script_common
+  script:
+    - | 
+      info "🔄 Starting Deployment..."
+      npm install -g surge
+      surge --project ./website/build/coffee-as-a-service --domain coffee-as-a-service.surge.sh
+      info "✅ Deployment Finished..."
+  environment:
+    name: production
+    url: http://coffee-as-a-service.surge.sh
+
+################## NOTIFICATION #####################
+
+Failure:
+  image: gradle:jdk11
+  stage: Notification
+  when: on_failure
+  before_script:
+    - git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@git.sodexo.com.br/devsecops/pipeline/notification.git ./$CI_PROJECT_NAME/notification
+  script:
+    - cd $CI_PROJECT_NAME/notification
+    - sed -i 's|<WEBHOOK>|$WEBHOOK|g' notificationFailure.sh
+    - sed -i 's|<PROJECT_PATH>|'$CI_PROJECT_PATH'|g' notificationFailure.sh
+    - sed -i 's|<PIPE_ID>|'$CI_PIPELINE_ID'|g' notificationFailure.sh
+    - sed -i 's|<PIPE_URL>|'$CI_PIPELINE_URL'|g' notificationFailure.sh
+    - sed -i 's|<BRANCH_NAME>|'$CI_COMMIT_REF_NAME'|g' notificationFailure.sh
+    - sed -i 's|<PROJECT_URL>|'$CI_PROJECT_URL'|g' notificationFailure.sh
+    - sed -i 's|<PROJECT_NAME>|'$CI_PROJECT_NAME'|g' notificationFailure.sh
+    - sed -i 's|<PROJECT_URL>|'$CI_PROJECT_URL'|g' notificationFailure.sh
+    - sed -i 's|<USER_LOGIN>|'$GITLAB_USER_LOGIN'|g' notificationFailure.sh
+    - sed -i 's|<USER_EMAIL>|'$GITLAB_USER_EMAIL'|g' notificationFailure.sh
+    - source notificationFailure.sh
+  only:
+    refs:
+      - /^dev.*$/
+      - /^hom.*$/
+      - hml
+      - SAT
+      - master
+      - tags
+
+Success:
+  image: gradle:jdk11
+  stage: Notification
+  when: on_success
+  before_script:
+    - git clone --depth 1 https://gitlab-ci-token:${CI_JOB_TOKEN}@git.sodexo.com.br/devsecops/pipeline/notification.git ./$CI_PROJECT_NAME/notification
+  script:
+    - cd $CI_PROJECT_NAME/notification
+    - sed -i 's|<WEBHOOK>|$WEBHOOK|g' notificationSuccess.sh
+    - sed -i 's|<PROJECT_PATH>|'$CI_PROJECT_PATH'|g' notificationSuccess.sh
+    - sed -i 's|<PIPE_ID>|'$CI_PIPELINE_ID'|g' notificationSuccess.sh
+    - sed -i 's|<PIPE_URL>|'$CI_PIPELINE_URL'|g' notificationSuccess.sh
+    - sed -i 's|<BRANCH_NAME>|'$CI_COMMIT_REF_NAME'|g' notificationSuccess.sh
+    - sed -i 's|<PROJECT_URL>|'$CI_PROJECT_URL'|g' notificationSuccess.sh
+    - sed -i 's|<PROJECT_NAME>|'$CI_PROJECT_NAME'|g' notificationSuccess.sh
+    - sed -i 's|<PROJECT_URL>|'$CI_PROJECT_URL'|g' notificationSuccess.sh
+    - sed -i 's|<USER_LOGIN>|'$GITLAB_USER_LOGIN'|g' notificationSuccess.sh
+    - sed -i 's|<USER_EMAIL>|'$GITLAB_USER_EMAIL'|g' notificationSuccess.sh
+    - source notificationSuccess.sh
+  only:
+    refs:
+      - /^dev.*$/
+      - /^hom.*$/
+      - hml
+      - SAT
+      - master
+      - tags
